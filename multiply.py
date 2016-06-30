@@ -27,8 +27,8 @@ flags.DEFINE_float('validation', 10.0, 'if non-zero, scale factor applied to '
                    'validation inputs.')
 
 # model params
-flags.DEFINE_bool('size', 10, 'how big to make the things')
-flags.DEFINE_integer('rank', 9, 'the rank of the decomposition')
+flags.DEFINE_bool('size', 5, 'how big to make the things')
+flags.DEFINE_integer('rank', 5, 'the rank of the decomposition')
 flags.DEFINE_string('decomposition', 'cp', 'how to decompose the tensor')
 
 # training params
@@ -71,8 +71,8 @@ def combine_inputs(input_a, input_b):
         result = input_a * input_b
         if 'permute' in FLAGS.operation:
             # we need a consistent permutation here
-            permutation = tf.random_shuffle(tf.range(FLAGS.size,
-                                                     dtype=tf.int32))
+            # not convinced that this is working
+            permutation = tf.random_shuffle(tf.range(FLAGS.size))
             # slightly awkwardly transpose, gather from the first index then
             # transpose it again.
             result = tf.transpose(tf.gather(tf.transpose(result), permutation))
