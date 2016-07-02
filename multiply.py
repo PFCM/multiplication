@@ -23,15 +23,13 @@ flags.DEFINE_string('operation', 'multiply', 'what we are actually trying to '
                     'the random data smaller and blow it up through a random '
                     'sparse (possibly binary) matrix to introduce some '
                     'structure.')
-flags.DEFINE_float('structure', 0.5, 'if correlate, the fraction (potentially)'
-                   ' greater than one) which controls the size of the random '
-                   'vector we are are blowing up or squishing down to create '
-                   'inputs.')
+flags.DEFINE_integer('values', 10, 'if correlate, the number of values we blow'
+                     ' up into `size`.')
 flags.DEFINE_float('validation', 10.0, 'if non-zero, scale factor applied to '
                    'validation inputs.')
 
 # model params
-flags.DEFINE_bool('size', 50, 'how big to make the things')
+flags.DEFINE_integer('size', 50, 'how big to make the things')
 flags.DEFINE_integer('rank', 5, 'the rank of the decomposition')
 flags.DEFINE_string('decomposition', 'cp', 'how to decompose the tensor')
 
@@ -39,13 +37,15 @@ flags.DEFINE_string('decomposition', 'cp', 'how to decompose the tensor')
 flags.DEFINE_float('learning_rate', 0.1, 'learning rate for sgd')
 flags.DEFINE_integer('batch_size', 10, 'how many to do at once')
 flags.DEFINE_integer('max_steps', 50000, 'how long to train for')
+flags.DEFINE_float('l1_reg', 0.0, 'how much, if any, l1 regularisation.')
 
 FLAGS = flags.FLAGS
 
 
 def _cp_product(input_a, input_b):
     """CANDECOMP/PARAFAC"""
-    tensor = mrnn.get_cp_tensor([FLAGS.size] * 3, FLAGS.rank, 'CP_tensor')
+    tensor = mrnn.get_cp_tensor([FLAGS.size] * 3, FLAGS.rank, 'CP_tensor',
+                                trainable=True)
     return mrnn.bilinear_product_cp(input_a, tensor, input_b)
 
 
@@ -59,30 +59,42 @@ def bilinear_product(input_a, input_b):
     return result
 
 
+def correlate_reshape(var_a, var_b):
+    """If the flags ask for it, re size in a way that induces some
+    fixed structure"""
+    if "correlate" in FLAGS.operation:
+        # could do this by making some sparse matrices,
+        # but for now we are just going to gather
+        # which is probably more efficient, certainly for big stuff
+        indices = tf.range(FLAGS.size) % FLAGS.values
+        idces_a = tf.Variable(tf.random_shuffle(indices), name='idces_a',
+                              trainable=False)
+        idces_b = tf.Variable(tf.random_shuffle(indices), name='idces_b',
+                              trainable=False)
+
+        var_a = tf.transpose(tf.gather(tf.transpose(var_a), idces_a))
+        var_b = tf.transpose(tf.gather(tf.transpose(var_b), idces_b))
+
+    return var_a, var_b
+
+
 def get_inputs():
     """Gets input tensors, with parameters from FLAGS"""
     with tf.variable_scope('inputs'):
         if "correlate" in FLAGS.operation:
-            random_size = int(FLAGS.size * FLAGS.structure)
-            permute_matrix = tf.Variable(
-                tf.random_uniform([random_size, FLAGS.size]))
+            random_size = FLAGS.values
         else:
             random_size = FLAGS.size
-            permute_matrix = None
         random_source = tf.random_uniform([FLAGS.batch_size * 2, random_size])
         if FLAGS.binary:
             random_source = tf.round(random_source)
-            if permute_matrix is not None:
-                permute_matrix = tf.round(permute_matrix)
-        if permute_matrix is not None:
-            random_source = tf.matmul(random_source, permute_matrix)
 
-        return tf.split(0, 2, random_source)
+        return correlate_reshape(*tf.split(0, 2, random_source))
 
 
 def combine_inputs(input_a, input_b):
     """Does the appropriate business to get the targets for our training"""
-    with tf.variable_scope('targets') as scope:
+    with tf.variable_scope('targets'):
         result = input_a * input_b
         if 'permute' in FLAGS.operation:
             # we need a consistent permutation here
@@ -106,6 +118,11 @@ def mse(vec_a, vec_b):
 
 def get_train_step(loss):
     """gets a training step op"""
+    regs = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+
+    if regs:
+        loss += tf.add_n(regs)
+
     opt = tf.train.MomentumOptimizer(FLAGS.learning_rate, 0.99)
     return opt.minimize(loss)
 
@@ -136,7 +153,7 @@ def main(_):
     input_a, input_b = get_inputs()
 
     with tf.variable_scope('model', initializer=tf.random_normal_initializer(
-     stddev=0.1)) as scope:
+     stddev=1/FLAGS.size), regularizer=l1_regularizer(FLAGS.l1_reg)) as scope:
 
         targets = combine_inputs(input_a, input_b)
 
