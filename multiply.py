@@ -14,20 +14,24 @@ import mrnn
 
 flags = tf.app.flags
 # meta params
-flags.DEFINE_bool('binary', False, 'if we true, we are trying to learn to AND, '
-                  'otherwise mutliply scalars.')
-flags.DEFINE_string('structure', 'none', 'Whether there is any structure '
-                    'hidden in the random inputs. Currently supported values '
-                    'are `none` for no structure (pure random).')
+flags.DEFINE_bool('binary', False, 'if we true, we are trying to learn to AND,'
+                  ' otherwise mutliply scalars.')
 flags.DEFINE_string('operation', 'multiply', 'what we are actually trying to '
                     'learn, if `multiply` just a class AND/Hadamard, if '
                     '`permute_multiply` then we shuffle one of them first.'
-                    'Likely to try more in future')
+                    'If it contains the word correlate then we will also make '
+                    'the random data smaller and blow it up through a random '
+                    'sparse (possibly binary) matrix to introduce some '
+                    'structure.')
+flags.DEFINE_float('structure', 0.5, 'if correlate, the fraction (potentially)'
+                   ' greater than one) which controls the size of the random '
+                   'vector we are are blowing up or squishing down to create '
+                   'inputs.')
 flags.DEFINE_float('validation', 10.0, 'if non-zero, scale factor applied to '
                    'validation inputs.')
 
 # model params
-flags.DEFINE_bool('size', 5, 'how big to make the things')
+flags.DEFINE_bool('size', 50, 'how big to make the things')
 flags.DEFINE_integer('rank', 5, 'the rank of the decomposition')
 flags.DEFINE_string('decomposition', 'cp', 'how to decompose the tensor')
 
@@ -58,21 +62,37 @@ def bilinear_product(input_a, input_b):
 def get_inputs():
     """Gets input tensors, with parameters from FLAGS"""
     with tf.variable_scope('inputs'):
-        random_source = tf.random_uniform([FLAGS.batch_size * 2, FLAGS.size])
+        if "correlate" in FLAGS.operation:
+            random_size = int(FLAGS.size * FLAGS.structure)
+            permute_matrix = tf.Variable(
+                tf.random_uniform([random_size, FLAGS.size]))
+        else:
+            random_size = FLAGS.size
+            permute_matrix = None
+        random_source = tf.random_uniform([FLAGS.batch_size * 2, random_size])
         if FLAGS.binary:
             random_source = tf.round(random_source)
+            if permute_matrix is not None:
+                permute_matrix = tf.round(permute_matrix)
+        if permute_matrix is not None:
+            random_source = tf.matmul(random_source, permute_matrix)
 
         return tf.split(0, 2, random_source)
 
 
 def combine_inputs(input_a, input_b):
     """Does the appropriate business to get the targets for our training"""
-    with tf.variable_scope('targets'):
+    with tf.variable_scope('targets') as scope:
         result = input_a * input_b
         if 'permute' in FLAGS.operation:
             # we need a consistent permutation here
             # not convinced that this is working
-            permutation = tf.random_shuffle(tf.range(FLAGS.size))
+            permutation = tf.get_variable(
+                'permutation',
+                dtype=tf.int32,
+                initializer=tf.random_shuffle(tf.range(FLAGS.size)),
+                trainable=False,
+                regularizer=tf.no_regularizer)
             # slightly awkwardly transpose, gather from the first index then
             # transpose it again.
             result = tf.transpose(tf.gather(tf.transpose(result), permutation))
@@ -102,16 +122,26 @@ def count_trainable_params():
     return total
 
 
+def l1_regularizer(amount):
+    """Return an l1 regulariser"""
+
+    def _reg(var):
+        return tf.reduce_sum(tf.abs(var)) * amount
+
+    return _reg
+
+
 def main(_):
     """do the thing"""
     input_a, input_b = get_inputs()
 
-    targets = combine_inputs(input_a, input_b)
-
     with tf.variable_scope('model', initializer=tf.random_normal_initializer(
      stddev=0.1)) as scope:
-        model_outputs = bilinear_product(input_a, input_b)
 
+        targets = combine_inputs(input_a, input_b)
+
+        model_outputs = bilinear_product(input_a, input_b)
+        print('got model')
         if FLAGS.validation != 0.0:
             scope.reuse_variables()
             vinput_a = input_a * FLAGS.validation
@@ -156,7 +186,7 @@ def main(_):
             vloss, = sess.run([valid_loss])
             print('Validation loss: {}'.format(vloss))
             print('   (inputs scaled by {})'.format(FLAGS.validation))
-        print(sess.run(tf.trainable_variables()))
+        # print(sess.run(tf.trainable_variables()))
 
 if __name__ == '__main__':
     tf.app.run()
