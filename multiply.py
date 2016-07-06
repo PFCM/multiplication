@@ -4,6 +4,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import json
+
 import numpy as np
 import tensorflow as tf
 
@@ -13,6 +15,9 @@ import mrnn
 
 
 flags = tf.app.flags
+# admin
+flags.DEFINE_string('log_path', 'log', 'Where to write the training loss')
+
 # meta params
 flags.DEFINE_bool('binary', False, 'if we true, we are trying to learn to AND,'
                   ' otherwise mutliply scalars.')
@@ -25,7 +30,7 @@ flags.DEFINE_string('operation', 'multiply', 'what we are actually trying to '
                     'structure.')
 flags.DEFINE_integer('values', 10, 'if correlate, the number of values we blow'
                      ' up into `size`.')
-flags.DEFINE_float('validation', 10.0, 'if non-zero, scale factor applied to '
+flags.DEFINE_float('validation', 0.0, 'if non-zero, scale factor applied to '
                    'validation inputs.')
 
 # model params
@@ -35,7 +40,7 @@ flags.DEFINE_string('decomposition', 'cp', 'how to decompose the tensor')
 
 # training params
 flags.DEFINE_float('learning_rate', 0.1, 'learning rate for sgd')
-flags.DEFINE_integer('batch_size', 10, 'how many to do at once')
+flags.DEFINE_integer('batch_size', 32, 'how many to do at once')
 flags.DEFINE_integer('max_steps', 50000, 'how long to train for')
 flags.DEFINE_float('l1_reg', 0.0, 'how much, if any, l1 regularisation.')
 
@@ -49,10 +54,19 @@ def _cp_product(input_a, input_b):
     return mrnn.bilinear_product_cp(input_a, tensor, input_b)
 
 
+def _tt_product(input_a, input_b):
+    """tensor-train"""
+    tensor = mrnn.get_tt_3_tensor([FLAGS.size] * 3, [FLAGS.rank, FLAGS.rank],
+                                  'TT_tensor', trainable=True)
+    return mrnn.bilinear_product_tt_3(input_a, tensor, input_b)
+
+
 def bilinear_product(input_a, input_b):
     """do the product"""
     if FLAGS.decomposition == 'cp':
         result = _cp_product(input_a, input_b)
+    elif FLAGS.decomposition == 'tt':
+        result = _tt_product(input_a, input_b)
     else:
         raise ValueError(
             'Unknown decomposition `{}`'.format(FLAGS.decomposition))
@@ -123,7 +137,8 @@ def get_train_step(loss):
     if regs:
         loss += tf.add_n(regs)
 
-    opt = tf.train.MomentumOptimizer(FLAGS.learning_rate, 0.99)
+    # opt = tf.train.MomentumOptimizer(FLAGS.learning_rate, 0.99)
+    opt = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
     return opt.minimize(loss)
 
 
@@ -153,7 +168,7 @@ def main(_):
     input_a, input_b = get_inputs()
 
     with tf.variable_scope('model', initializer=tf.random_normal_initializer(
-     stddev=1/FLAGS.size), regularizer=l1_regularizer(FLAGS.l1_reg)) as scope:
+     stddev=1/10)) as scope:
 
         targets = combine_inputs(input_a, input_b)
 
@@ -187,23 +202,28 @@ def main(_):
 
     sess = tf.Session()
     sess.run(tf.initialize_all_variables())
+    losses = []
     with sess.as_default():
         bar.start(FLAGS.max_steps)
         for step in range(FLAGS.max_steps):
             a, b, batch_loss, _ = sess.run(
                 [input_a, input_b, loss_op, train_op])
             bar.update(step, loss=batch_loss)
+            if (step+1) % 50 == 0:
+                losses.append([step, repr(batch_loss)])
             # print('a: {}'.format(a))
             # print('b: {}'.format(b))
             # import time; time.sleep(1)
         bar.finish()
 
-        print(sess.run(tf.reduce_sum(tf.add_n(tf.trainable_variables()))))
+        # print(sess.run(tf.reduce_sum(tf.add_n(tf.trainable_variables()))))
         if valid_loss is not None:
             vloss, = sess.run([valid_loss])
             print('Validation loss: {}'.format(vloss))
             print('   (inputs scaled by {})'.format(FLAGS.validation))
         # print(sess.run(tf.trainable_variables()))
+        with open(FLAGS.log_path, 'w') as fp:
+            json.dump(losses, fp)
 
 if __name__ == '__main__':
     tf.app.run()
