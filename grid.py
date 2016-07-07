@@ -50,7 +50,7 @@ def run():
                 args = ['--decomposition=' + decomp,
                         '--rank={}'.format(rank),
                         '--operation=' + experiment]
-                logfile = os.path.join('results', experiment, decomp)
+                logfile = os.path.join('momentum_results', experiment, decomp)
                 os.makedirs(logfile, exist_ok=True)
                 if 'values' in operations[experiment]:
                     log_base = logfile

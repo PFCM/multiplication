@@ -137,8 +137,8 @@ def get_train_step(loss):
     if regs:
         loss += tf.add_n(regs)
 
-    # opt = tf.train.MomentumOptimizer(FLAGS.learning_rate, 0.99)
-    opt = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
+    opt = tf.train.MomentumOptimizer(FLAGS.learning_rate, 0.9)
+    # opt = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
     return opt.minimize(loss)
 
 
